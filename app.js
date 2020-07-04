@@ -9,7 +9,20 @@ const path = require("path");
 const cookieParser = require("cookie-parser");
 const session = require("express-session");
 const bodyParser = require("body-parser");
-var debug = require("debug")("personalapp:server");
+const debug = require("debug")("personalapp:server");
+const flash = require('connect-flash');
+const crypto = require('crypto')
+const hash = crypto.createHash('sha256');
+
+
+const mongoose = require( 'mongoose' );
+const mongodb_URI = process.env.MONGODB_URI // was 'mongodb://localhost/hsad'
+mongoose.connect( mongodb_URI, { useNewUrlParser: true } );
+const db = mongoose.connection;
+db.on('error', console.error.bind(console, 'connection error:'));
+db.once('open', function() {console.log("we are connected!!!")});
+
+const User = require('./models/User')
 
 // Now we create the server
 const app = express();
@@ -36,7 +49,7 @@ app.use(
 );
 
 app.use(bodyParser.urlencoded({ extended: false }));
-
+app.use(flash())
 // This is an example of middleware
 // where we look at a request and process it!
 app.use(function(req, res, next) {
@@ -45,6 +58,92 @@ app.use(function(req, res, next) {
   //console.dir(req.headers)
   next();
 });
+
+
+app.use((req,res,next) => {
+  if (req.session.username) {
+    res.locals.loggedIn = true
+    res.locals.username = req.session.username
+    res.locals.user = req.session.user
+  } else {
+    res.locals.loggedIn = false
+    res.locals.username = null
+    res.locals.user = null
+  }
+  console.log("res.locals = "+JSON.stringify(res.locals))
+  next()
+})
+
+
+app.get("/login", (req,res) => {
+  res.render("login")
+})
+
+app.post('/login',
+  async (req,res,next) => {
+    try {
+      const {username,passphrase} = req.body
+      const hash = crypto.createHash('sha256');
+      hash.update(passphrase);
+      const encrypted = hash.digest('hex')
+      console.log(`hash.digest=${encrypted}`)
+      const user = await User.findOne({username:username,passphrase:encrypted})
+      console.log(`user = ${user}`)
+
+      if (user) {
+        req.session.username = username //req.body
+        req.session.user = user
+        req.flash("successfully logged in")
+        console.log(`logged in as ${req.session.username}`)
+        console.log(`username=${username} and passphrase=${passphrase}`)
+        res.redirect('/')
+      } else {
+        req.session.username = null
+        req.session.user = user
+        req.flash("incorrect username or password")
+        res.redirect('/login')
+      }
+    }catch(e){
+      next(e)
+    }
+  })
+
+app.post('/signup',
+  async (req,res,next) =>{
+    try {
+      const {username,passphrase,passphrase2} = req.body
+      if (passphrase != passphrase2){
+        req.flash("passphrases don't match, try again!")
+        res.redirect('/login')
+      }else if (passphrase.split(' ').length < 5) {
+        req.flash("passphrase is too short, try again!")
+        res.redirect('/login')
+      }else {
+        console.log(`signing up ${username} with passphrase "${passphrase}"`)
+        const hash = crypto.createHash('sha256');
+        hash.update(passphrase);
+        const encrypted = hash.digest('hex')
+        console.log(`hash.digest=${encrypted}`)
+        console.log(`hash.digest=${encrypted}`)
+        const user = new User({username:username,passphrase:encrypted})
+        await user.save()
+        console.log('saved info in User')
+        req.session.username = user.username
+        req.session.user = user
+        res.redirect('/')
+      }
+    }catch(e){
+      next(e)
+    }
+  })
+
+app.get('/logout', (req,res) => {
+  req.session.destroy() //(error)=>{console.log("Error in destroying session: "+error)});
+  res.redirect('/');
+})
+
+
+
 
 // here we start handling routes
 app.get("/", (req, res, next) => {
